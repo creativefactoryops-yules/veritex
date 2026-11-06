@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VERITEX — voice stress analysis</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+:root { --bg:#040805; --panel:#0a0f0a; --border:#1c2b1c; --phos:#3DFF73; --dim:#2EA05C; --acid:#b5ff4d; --danger:#ff3355; --warn:#ffaa00; --text:#e0e0f0; --muted:#5a7a5a; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; min-height:100vh; }
+.app { max-width:720px; margin:0 auto; padding:24px 16px; display:flex; flex-direction:column; gap:20px; }
+.header { text-align:center; }
+.header h1 { font-size:2rem; font-weight:700; letter-spacing:0.3em; color:var(--phos); text-shadow:0 0 20px #3DFF7366; }
+.header .sub { font-size:0.7rem; color:var(--muted); letter-spacing:0.15em; margin-top:4px; }
+.apikey-box { background:var(--panel); border:1px solid var(--border); padding:14px; }
+.apikey-box label { font-size:0.65rem; color:var(--muted); letter-spacing:0.15em; display:block; margin-bottom:8px; }
+.apikey-box input { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; font-family:'JetBrains Mono',monospace; font-size:0.8rem; border-radius:4px; }
+.apikey-box input:focus { border-color:var(--phos); outline:none; }
+.apikey-box .note { font-size:0.6rem; color:var(--muted); margin-top:6px; }
+.status-bar { display:flex; align-items:center; justify-content:space-between; background:var(--panel); border:1px solid var(--border); padding:8px 16px; font-size:0.72rem; color:var(--muted); }
+.status-dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; margin-right:6px; }
+.status-dot.active { background:var(--phos); box-shadow:0 0 8px var(--phos); animation:pulse 1s infinite; }
+.status-dot.danger { background:var(--danger); box-shadow:0 0 8px var(--danger); animation:pulse 0.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.waveform-panel { background:var(--panel); border:1px solid var(--border); padding:16px; position:relative; overflow:hidden; }
+.waveform-label { font-size:0.65rem; color:var(--muted); letter-spacing:0.15em; margin-bottom:10px; display:flex; justify-content:space-between; }
+.live-transcript { font-size:0.7rem; color:#3DFF7388; font-style:italic; max-width:60%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+canvas { width:100%; height:100px; display:block; }
+.controls { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+.btn { padding:14px 28px; font-family:'JetBrains Mono',monospace; font-weight:700; font-size:0.9rem; letter-spacing:0.1em; border:none; cursor:pointer; transition:all 0.2s; border-radius:4px; }
+.btn-record { background:transparent; border:2px solid var(--phos); color:var(--phos); }
+.btn-record:hover { background:#3DFF7322; }
+.btn-record.recording { border-color:var(--danger); color:var(--danger); }
+.btn-analyze { background:var(--phos); color:var(--bg); }
+.btn-analyze:hover { box-shadow:0 0 24px #3DFF7366; }
+.btn-analyze:disabled { background:var(--muted); cursor:not-allowed; box-shadow:none; }
+.btn-clear { background:transparent; border:1px solid var(--muted); color:var(--muted); padding:14px 20px; }
+.meter-row { display:flex; gap:12px; }
+.meter-box { flex:1; background:var(--panel); border:1px solid var(--border); padding:14px; border-radius:4px; }
+.meter-label { font-size:0.62rem; color:var(--muted); letter-spacing:0.15em; margin-bottom:8px; }
+.meter-value { font-size:2rem; font-weight:700; }
+.meter-bar-track { height:4px; background:var(--border); margin-top:8px; border-radius:2px; }
+.meter-bar-fill { height:4px; transition:width 0.4s; border-radius:2px; }
+.transcript-box { background:var(--panel); border:1px solid var(--border); padding:12px 16px; border-radius:4px; }
+.transcript-label { font-size:0.6rem; color:var(--muted); letter-spacing:0.15em; margin-bottom:6px; }
+.transcript-text { font-size:0.95rem; min-height:24px; line-height:1.5; }
+.transcript-text .interim { color:var(--muted); font-style:italic; }
+.result-panel { background:var(--panel); border:2px solid var(--border); padding:20px; border-radius:4px; }
+.result-panel.truth { border-color:var(--phos); }
+.result-panel.lie { border-color:var(--danger); }
+.result-panel.uncertain { border-color:var(--warn); }
+.verdict-line { display:flex; align-items:center; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+.verdict-badge { padding:6px 16px; font-size:0.85rem; font-weight:700; letter-spacing:0.15em; border-radius:4px; }
+.verdict-badge.truth { background:#3DFF7322; border:1px solid var(--phos); color:var(--phos); }
+.verdict-badge.lie { background:#ff335522; border:1px solid var(--danger); color:var(--danger); }
+.verdict-badge.uncertain { background:#ffaa0022; border:1px solid var(--warn); color:var(--warn); }
+.confidence-number { font-size:2.2rem; font-weight:700; }
+.analysis-text { font-size:0.9rem; line-height:1.6; margin-bottom:14px; }
+.signal-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:12px; }
+.signal-item { background:var(--bg); border:1px solid var(--border); padding:8px 12px; border-radius:4px; }
+.signal-name { color:var(--muted); font-size:0.6rem; margin-bottom:2px; }
+.signal-val { font-size:0.82rem; }
+.result-transcript { background:var(--bg); border:1px solid var(--border); padding:10px 12px; font-size:0.85rem; font-style:italic; margin-top:10px; border-radius:4px; }
+.loading-panel { background:var(--panel); border:1px solid var(--border); padding:32px; text-align:center; border-radius:4px; }
+.scan-bar { height:2px; background:var(--border); margin:16px 0; overflow:hidden; }
+.scan-fill { height:100%; background:var(--phos); animation:scan 1.5s linear infinite; }
+@keyframes scan { 0%{width:0;margin-left:0} 50%{width:60%;margin-left:20%} 100%{width:0;margin-left:100%} }
+.log-panel { background:var(--panel); border:1px solid var(--border); padding:12px; max-height:140px; overflow-y:auto; border-radius:4px; }
+.log-entry { font-size:0.65rem; color:var(--muted); padding:2px 0; border-bottom:1px solid var(--border); }
+.log-entry .ts { color:#3DFF7388; margin-right:8px; }
+.log-entry.warn .msg { color:var(--warn); } .log-entry.err .msg { color:var(--danger); } .log-entry.ok .msg { color:var(--phos); }
+.footer { text-align:center; font-size:0.6rem; color:var(--muted); padding:16px; }
+.footer .warn { color:var(--warn); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+const C = { bg:"#040805", panel:"#0a0f0a", border:"#1c2b1c", accent:"#3DFF73", danger:"#ff3355", warn:"#ffaa00", text:"#e0e0f0", muted:"#5a7a5a", truth:"#3DFF73", lie:"#ff3355" };
+
+function Veritex() {
+  const [apiKey, setApiKey] = useState(localStorage.getItem('veritex_key') || '');
+  const [recording, setRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioDur, setAudioDur] = useState(0);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [levels, setLevels] = useState({ volume:0, pitch:0, stress:0 });
+  const [log, setLog] = useState([{ type:"ok", msg:"system ready — enter api key to enable analysis" }]);
+  const [finalT, setFinalT] = useState("");
+  const [interimT, setInterimT] = useState("");
+  const [speechOK] = useState(() => "webkitSpeechRecognition" in window || "SpeechRecognition" in window);
+  const canvasRef = useRef(), mediaRecRef = useRef(), audioCtxRef = useRef(), analyserRef = useRef();
+  const chunksRef = useRef([]), timerRef = useRef(), waveRef = useRef(new Array(160).fill(128)), recRef = useRef(null);
+
+  const addLog = useCallback((msg, type="info") => {
+    const ts = new Date().toISOString().substr(11,8);
+    setLog(l => [...l.slice(-30), { ts, msg, type }]);
+  }, []);
+
+  const saveKey = (k) => { setApiKey(k); localStorage.setItem('veritex_key', k); };
+
+  useEffect(() => {
+    const draw = () => {
+      const cv = canvasRef.current; if (!cv) return;
+      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+      ctx.fillStyle = "#040805"; ctx.fillRect(0,0,W,H);
+      ctx.strokeStyle = "#1c2b1c"; ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+      ctx.shadowBlur = 8; ctx.shadowColor = recording ? C.danger : C.accent;
+      ctx.strokeStyle = recording ? C.danger : C.accent; ctx.lineWidth = 1.5; ctx.beginPath();
+      waveRef.current.forEach((v,i) => {
+        const x = (i/(waveRef.current.length-1))*W, y = H/2 + ((v-128)/128)*(H/2-8);
+        i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+      });
+      ctx.stroke(); ctx.shadowBlur = 0;
+    };
+    const cv = canvasRef.current;
+    if (cv) { cv.width = cv.offsetWidth * devicePixelRatio; cv.height = 100 * devicePixelRatio; }
+    let raf; const loop = () => { draw(); raf = requestAnimationFrame(loop); }; loop();
+    return () => cancelAnimationFrame(raf);
+  }, [recording]);
+
+  useEffect(() => {
+    if (!recording) return;
+    const iv = setInterval(() => {
+      if (!analyserRef.current) return;
+      const buf = new Uint8Array(analyserRef.current.fftSize);
+      analyserRef.current.getByteTimeDomainData(buf);
+      let sum = 0; buf.forEach(v => sum += Math.abs(v-128));
+      const vol = Math.min(100, Math.round((sum/buf.length)*3.2));
+      waveRef.current = [...waveRef.current.slice(8), ...Array.from(buf.slice(0,8))];
+      const variance = buf.reduce((a,v) => a + (v-128)**2, 0)/buf.length;
+      const pitch = Math.min(100, Math.round(Math.sqrt(variance)*2.2));
+      setLevels({ volume:vol, pitch, stress:Math.min(100, Math.round(vol*0.6+pitch*0.4)) });
+    }, 50);
+    return () => clearInterval(iv);
+  }, [recording]);
+
+  const startRec = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      audioCtxRef.current = new (window.AudioContext||window.webkitAudioContext)();
+      const src = audioCtxRef.current.createMediaStreamSource(stream);
+      analyserRef.current = audioCtxRef.current.createAnalyser();
+      analyserRef.current.fftSize = 256; src.connect(analyserRef.current);
+      chunksRef.current = [];
+      mediaRecRef.current = new MediaRecorder(stream);
+      mediaRecRef.current.ondataavailable = e => chunksRef.current.push(e.data);
+      mediaRecRef.current.onstop = () => {
+        setAudioBlob(new Blob(chunksRef.current, { type:"audio/webm" }));
+        stream.getTracks().forEach(t => t.stop());
+        addLog("recording saved", "ok");
+      };
+      mediaRecRef.current.start();
+      if (speechOK) {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = "en-US";
+        let acc = "";
+        rec.onresult = (e) => {
+          let interim = "";
+          for (let i=e.resultIndex; i<e.results.length; i++) {
+            const t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) { acc += t + " "; setFinalT(acc.trim()); }
+            else interim += t;
+          }
+          setInterimT(interim);
+        };
+        rec.onerror = (e) => addLog("speech error: "+e.error, "err");
+        rec.start(); recRef.current = rec;
+        addLog("speech recognition active", "ok");
+      }
+      timerRef.current = setInterval(() => setAudioDur(Math.floor((Date.now()-Date.now()+0)/1000)||0), 500);
+      const t0 = Date.now();
+      timerRef.current = setInterval(() => setAudioDur(Math.floor((Date.now()-t0)/1000)), 500);
+      setRecording(true); setResult(null); setFinalT(""); setInterimT("");
+      addLog("recording — voice analysis active", "warn");
+    } catch(e) { addLog("mic denied: "+e.message, "err"); }
+  };
+
+  const stopRec = () => {
+    mediaRecRef.current?.stop(); recRef.current?.stop(); recRef.current = null;
+    clearInterval(timerRef.current); setRecording(false); setInterimT("");
+    waveRef.current = new Array(160).fill(128);
+    setLevels({ volume:0, pitch:0, stress:0 });
+    addLog("recording stopped", "info");
+  };
+
+  const analyze = async () => {
+    if (!audioBlob || !apiKey) { addLog("need audio + api key", "err"); return; }
+    setAnalyzing(true);
+    const spoken = finalT.trim();
+    const prompt = `You are a linguistic reflection tool for entertainment only. ${spoken ? `TRANSCRIPT:\n"${spoken}"\n\nReflect on the language patterns you notice (hedging, pronoun use, level of detail, emotional consistency, contradictions). This is NOT deception detection — you cannot determine truthfulness from text. Offer an interesting linguistic observation, not a verdict.` : `No transcript captured. Nothing to reflect on.`}\n\nReturn ONLY JSON, no markdown:\n{"reflection":"2-3 sentence linguistic observation, curious tone, no verdict on truthfulness","patterns":["pattern 1","pattern 2","pattern 3"],"note":"entertainment only — not deception detection"}`;
+    try {
+      addLog("analyzing via claude...", "info");
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-dangerous-direct-browser-access":"true" },
+        body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:1000, messages:[{role:"user",content:prompt}] })
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error.message);
+      const raw = data.content.map(c=>c.text||"").join("").trim().replace(/```json|```/g,"").trim();
+      const p = JSON.parse(raw);
+      setResult(p);
+      addLog(`verdict: ${p.verdict} — ${p.confidence}%`, p.verdict==="TRUTH"?"ok":p.verdict==="DECEPTION"?"err":"warn");
+    } catch(e) { addLog("analysis error: "+e.message, "err"); }
+    setAnalyzing(false);
+  };
+
+  const clear = () => { setAudioBlob(null); setResult(null); setFinalT(""); setInterimT(""); setAudioDur(0); addLog("cleared","info"); };
+  const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  const mc = v => v>70?C.danger : v>40?C.warn : C.accent;
+  const vc = v => v==="TRUTH"?"truth" : v==="DECEPTION"?"lie" : "uncertain";
+
+  return (
+    <div className="app">
+      <div className="header"><h1>❯ veritex</h1><div className="sub">voice stress analysis · --force ./buildyou</div></div>
+      <div className="apikey-box">
+        <label>CLAUDE API KEY (stored locally, never sent except to anthropic)</label>
+        <input type="password" value={apiKey} onChange={e=>saveKey(e.target.value)} placeholder="sk-ant-..." />
+        <div className="note">get one at console.anthropic.com · required for analysis</div>
+      </div>
+      <div className="status-bar">
+        <span><span className={`status-dot ${recording?"danger":audioBlob?"active":""}`} />{recording?`● REC ${fmt(audioDur)}`:audioBlob?`READY — ${fmt(audioDur)}s`:"STANDBY"}</span>
+        <span style={{color: speechOK?C.truth:C.warn}}>{speechOK?"● SPEECH ONLINE":"⚠ NO SPEECH API"}</span>
+      </div>
+      <div className="waveform-panel">
+        <div className="waveform-label"><span>voice waveform</span>{recording&&interimT&&<span className="live-transcript">"{interimT}"</span>}</div>
+        <canvas ref={canvasRef} />
+      </div>
+      <div className="meter-row">
+        {[["volume",levels.volume],["pitch",levels.pitch],["stress",levels.stress]].map(([l,v]) => (
+          <div className="meter-box" key={l}><div className="meter-label">{l}</div>
+          <div className="meter-value" style={{color:mc(v)}}>{v}</div>
+          <div className="meter-bar-track"><div className="meter-bar-fill" style={{width:`${v}%`,background:mc(v)}} /></div></div>
+        ))}
+      </div>
+      {(recording||finalT) && <div className="transcript-box"><div className="transcript-label">transcript</div>
+        <div className="transcript-text">{finalT}{interimT&&<span className="interim"> {interimT}</span>}{!finalT&&!interimT&&recording&&<span style={{color:C.muted,fontStyle:"italic"}}>listening...</span>}</div></div>}
+      <div className="controls">
+        <button className={`btn btn-record ${recording?"recording":""}`} onClick={recording?stopRec:startRec}>{recording?"⏹ stop":"⏺ record"}</button>
+        <button className="btn btn-analyze" disabled={!audioBlob||analyzing||!apiKey} onClick={analyze}>{analyzing?"scanning...":"analyze"}</button>
+        <button className="btn btn-clear" onClick={clear}>clr</button>
+      </div>
+      {analyzing && <div className="loading-panel"><div style={{fontSize:"0.75rem",color:C.muted,letterSpacing:"0.2em"}}>reflecting on language patterns</div><div className="scan-bar"><div className="scan-fill"/></div></div>}
+      {result && !analyzing && (
+        <div className="result-panel">
+          <div className="verdict-line">
+            <span className="verdict-badge" style={{borderColor:C.warn,color:C.warn}}>LINGUISTIC REFLECTION</span>
+          </div>
+          <div className="analysis-text">{result.reflection}</div>
+          {finalT && <div className="result-transcript">"{finalT}"</div>}
+          {result.patterns?.map((s,i) => <div key={i} style={{fontSize:"0.65rem",color:C.muted,padding:"4px 0",borderBottom:`1px solid ${C.border}`}}>▸ {s}</div>)}
+          <div style={{fontSize:"0.6rem",color:C.warn,marginTop:"8px"}}>⚠ {result.note || "entertainment only — not deception detection"}</div>
+        </div>
+      )}
+      <div className="log-panel">{log.map((e,i) => <div key={i} className={`log-entry ${e.type}`}><span className="ts">{e.ts}</span><span className="msg">{e.msg}</span></div>)}</div>
+      <div className="footer"><span className="warn">⚠ entertainment only · linguistic reflection, not deception detection · cannot determine truthfulness</span><br/>❯ y_ · --force ./buildyou</div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Veritex />);
+</script>
+</body>
+</html>
