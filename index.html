@@ -385,13 +385,15 @@ const { useState, useRef, useEffect, useCallback } = React;
 const C = { bg: "#040805", panel: "#0a0f0a", border: "#1c2b1c", accent: "#3DFF73", danger: "#ff3355", warn: "#ffaa00", text: "#e0e0f0", muted: "#5a7a5a", truth: "#3DFF73", lie: "#ff3355" };
 function Veritex() {
   const [apiKey, setApiKey] = useState(localStorage.getItem("veritex_key") || "");
+  const [ollama, setOllama] = useState({ online: false, model: "" });
+  const ollamaLogged = useRef(false);
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioDur, setAudioDur] = useState(0);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [levels, setLevels] = useState({ volume: 0, pitch: 0, stress: 0 });
-  const [log, setLog] = useState([{ type: "ok", msg: "system ready \u2014 enter api key to enable analysis" }]);
+  const [log, setLog] = useState([{ type: "ok", msg: "system ready \u2014 add a claude key, or run ollama for free local analysis" }]);
   const [finalT, setFinalT] = useState("");
   const [interimT, setInterimT] = useState("");
   const [speechOK] = useState(() => "webkitSpeechRecognition" in window || "SpeechRecognition" in window);
@@ -405,6 +407,33 @@ function Veritex() {
     setApiKey(k);
     localStorage.setItem("veritex_key", k);
   };
+  const OLLAMA_MODELS = ["mistral", "llama3.2", "llama3", "qwen2.5", "phi3", "gemma2", "deepseek-r1", "codellama"];
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const r = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3e3) });
+        const d = await r.json();
+        const full = (d.models || []).map((m) => m.name);
+        const model = OLLAMA_MODELS.map((b) => full.find((n) => n.split(":")[0] === b)).find(Boolean) || full[0] || "";
+        if (model) {
+          setOllama({ online: true, model });
+          if (!ollamaLogged.current) {
+            ollamaLogged.current = true;
+            addLog(`ollama online \u2014 ${model} (free local)`, "ok");
+          }
+        } else {
+          setOllama({ online: false, model: "" });
+          ollamaLogged.current = false;
+        }
+      } catch {
+        setOllama({ online: false, model: "" });
+        ollamaLogged.current = false;
+      }
+    };
+    check();
+    const iv = setInterval(check, 3e4);
+    return () => clearInterval(iv);
+  }, []);
   useEffect(() => {
     const draw = () => {
       const cv2 = canvasRef.current;
@@ -522,8 +551,8 @@ function Veritex() {
     addLog("recording stopped", "info");
   };
   const analyze = async () => {
-    if (!audioBlob || !apiKey) {
-      addLog("need audio + api key", "err");
+    if (!audioBlob || !apiKey && !ollama.online) {
+      addLog("need audio + api key or local ollama", "err");
       return;
     }
     setAnalyzing(true);
@@ -536,18 +565,33 @@ Reflect on the language patterns you notice (hedging, pronoun use, level of deta
 Return ONLY JSON, no markdown:
 {"reflection":"2-3 sentence linguistic observation, curious tone, no verdict on truthfulness","patterns":["pattern 1","pattern 2","pattern 3"],"note":"entertainment only \u2014 not deception detection"}`;
     try {
-      addLog("analyzing via claude...", "info");
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1e3, messages: [{ role: "user", content: prompt }] })
-      });
-      const data = await r.json();
-      if (data.error) throw new Error(data.error.message);
-      const raw = data.content.map((c) => c.text || "").join("").trim().replace(/```json|```/g, "").trim();
-      const p = JSON.parse(raw);
+      let p;
+      if (apiKey) {
+        addLog("analyzing via claude...", "info");
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1e3, messages: [{ role: "user", content: prompt }] })
+        });
+        const data = await r.json();
+        if (data.error) throw new Error(data.error.message);
+        const raw = data.content.map((c) => c.text || "").join("").trim().replace(/```json|```/g, "").trim();
+        p = JSON.parse(raw);
+      } else {
+        addLog(`analyzing via ollama (${ollama.model}) \u2014 free local`, "info");
+        const r = await fetch("http://localhost:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: ollama.model, prompt, stream: false })
+        });
+        const data = await r.json();
+        const raw = (data.response || "").trim().replace(/```json|```/g, "").trim();
+        const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
+        if (s === -1 || e === -1) throw new Error("local model returned no JSON");
+        p = JSON.parse(raw.slice(s, e + 1));
+      }
       setResult(p);
-      addLog(`verdict: ${p.verdict} \u2014 ${p.confidence}%`, p.verdict === "TRUTH" ? "ok" : p.verdict === "DECEPTION" ? "err" : "warn");
+      addLog("reflection ready", "ok");
     } catch (e) {
       addLog("analysis error: " + e.message, "err");
     }
@@ -564,7 +608,7 @@ Return ONLY JSON, no markdown:
   const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const mc = (v) => v > 70 ? C.danger : v > 40 ? C.warn : C.accent;
   const vc = (v) => v === "TRUTH" ? "truth" : v === "DECEPTION" ? "lie" : "uncertain";
-  return /* @__PURE__ */ React.createElement("div", { className: "app" }, /* @__PURE__ */ React.createElement("div", { className: "header" }, /* @__PURE__ */ React.createElement("h1", null, "\u276F veritex"), /* @__PURE__ */ React.createElement("div", { className: "sub" }, "voice stress analysis \xB7 --force ./buildyou")), /* @__PURE__ */ React.createElement("div", { className: "apikey-box" }, /* @__PURE__ */ React.createElement("label", null, "CLAUDE API KEY (stored locally, never sent except to anthropic)"), /* @__PURE__ */ React.createElement("input", { type: "password", value: apiKey, onChange: (e) => saveKey(e.target.value), placeholder: "sk-ant-..." }), /* @__PURE__ */ React.createElement("div", { className: "note" }, "get one at console.anthropic.com \xB7 required for analysis")), /* @__PURE__ */ React.createElement("div", { className: "status-bar" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: `status-dot ${recording ? "danger" : audioBlob ? "active" : ""}` }), recording ? `\u25CF REC ${fmt(audioDur)}` : audioBlob ? `READY \u2014 ${fmt(audioDur)}s` : "STANDBY"), /* @__PURE__ */ React.createElement("span", { style: { color: speechOK ? C.truth : C.warn } }, speechOK ? "\u25CF SPEECH ONLINE" : "\u26A0 NO SPEECH API")), /* @__PURE__ */ React.createElement("div", { className: "waveform-panel" }, /* @__PURE__ */ React.createElement("div", { className: "waveform-label" }, /* @__PURE__ */ React.createElement("span", null, "voice waveform"), recording && interimT && /* @__PURE__ */ React.createElement("span", { className: "live-transcript" }, '"', interimT, '"')), /* @__PURE__ */ React.createElement("canvas", { ref: canvasRef })), /* @__PURE__ */ React.createElement("div", { className: "meter-row" }, [["volume", levels.volume], ["pitch", levels.pitch], ["stress", levels.stress]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { className: "meter-box", key: l }, /* @__PURE__ */ React.createElement("div", { className: "meter-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "meter-value", style: { color: mc(v) } }, v), /* @__PURE__ */ React.createElement("div", { className: "meter-bar-track" }, /* @__PURE__ */ React.createElement("div", { className: "meter-bar-fill", style: { width: `${v}%`, background: mc(v) } }))))), (recording || finalT) && /* @__PURE__ */ React.createElement("div", { className: "transcript-box" }, /* @__PURE__ */ React.createElement("div", { className: "transcript-label" }, "transcript"), /* @__PURE__ */ React.createElement("div", { className: "transcript-text" }, finalT, interimT && /* @__PURE__ */ React.createElement("span", { className: "interim" }, " ", interimT), !finalT && !interimT && recording && /* @__PURE__ */ React.createElement("span", { style: { color: C.muted, fontStyle: "italic" } }, "listening..."))), /* @__PURE__ */ React.createElement("div", { className: "controls" }, /* @__PURE__ */ React.createElement("button", { className: `btn btn-record ${recording ? "recording" : ""}`, onClick: recording ? stopRec : startRec }, recording ? "\u23F9 stop" : "\u23FA record"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-analyze", disabled: !audioBlob || analyzing || !apiKey, onClick: analyze }, analyzing ? "scanning..." : "analyze"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-clear", onClick: clear }, "clr")), analyzing && /* @__PURE__ */ React.createElement("div", { className: "loading-panel" }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "0.75rem", color: C.muted, letterSpacing: "0.2em" } }, "reflecting on language patterns"), /* @__PURE__ */ React.createElement("div", { className: "scan-bar" }, /* @__PURE__ */ React.createElement("div", { className: "scan-fill" }))), result && !analyzing && /* @__PURE__ */ React.createElement("div", { className: "result-panel" }, /* @__PURE__ */ React.createElement("div", { className: "verdict-line" }, /* @__PURE__ */ React.createElement("span", { className: "verdict-badge", style: { borderColor: C.warn, color: C.warn } }, "LINGUISTIC REFLECTION")), /* @__PURE__ */ React.createElement("div", { className: "analysis-text" }, result.reflection), finalT && /* @__PURE__ */ React.createElement("div", { className: "result-transcript" }, '"', finalT, '"'), result.patterns?.map((s, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { fontSize: "0.65rem", color: C.muted, padding: "4px 0", borderBottom: `1px solid ${C.border}` } }, "\u25B8 ", s)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "0.6rem", color: C.warn, marginTop: "8px" } }, "\u26A0 ", result.note || "entertainment only \u2014 not deception detection")), /* @__PURE__ */ React.createElement("div", { className: "log-panel" }, log.map((e, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: `log-entry ${e.type}` }, /* @__PURE__ */ React.createElement("span", { className: "ts" }, e.ts), /* @__PURE__ */ React.createElement("span", { className: "msg" }, e.msg)))), /* @__PURE__ */ React.createElement("div", { className: "footer" }, /* @__PURE__ */ React.createElement("span", { className: "warn" }, "\u26A0 entertainment only \xB7 linguistic reflection, not deception detection \xB7 cannot determine truthfulness"), /* @__PURE__ */ React.createElement("br", null), "\u276F y_ \xB7 --force ./buildyou"));
+  return /* @__PURE__ */ React.createElement("div", { className: "app" }, /* @__PURE__ */ React.createElement("div", { className: "header" }, /* @__PURE__ */ React.createElement("h1", null, "\u276F veritex"), /* @__PURE__ */ React.createElement("div", { className: "sub" }, "voice stress analysis \xB7 --force ./buildyou")), /* @__PURE__ */ React.createElement("div", { className: "apikey-box" }, /* @__PURE__ */ React.createElement("label", null, "CLAUDE API KEY (stored locally, never sent except to anthropic)"), /* @__PURE__ */ React.createElement("input", { type: "password", value: apiKey, onChange: (e) => saveKey(e.target.value), placeholder: "sk-ant-..." }), /* @__PURE__ */ React.createElement("div", { className: "note" }, "get one at console.anthropic.com \xB7 optional if ollama is running locally")), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--panel)", border: "1px solid var(--border)", padding: "10px 14px", fontSize: "0.68rem", color: ollama.online ? C.accent : C.muted } }, ollama.online ? `\u25CF ollama online \u2014 ${ollama.model} \xB7 free local analysis, no key needed` : "\u25CB ollama offline \u2014 run ollama on your phone for free local analysis, or add a claude key above"), /* @__PURE__ */ React.createElement("div", { className: "status-bar" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { className: `status-dot ${recording ? "danger" : audioBlob ? "active" : ""}` }), recording ? `\u25CF REC ${fmt(audioDur)}` : audioBlob ? `READY \u2014 ${fmt(audioDur)}s` : "STANDBY"), /* @__PURE__ */ React.createElement("span", { style: { color: speechOK ? C.truth : C.warn } }, speechOK ? "\u25CF SPEECH ONLINE" : "\u26A0 NO SPEECH API")), /* @__PURE__ */ React.createElement("div", { className: "waveform-panel" }, /* @__PURE__ */ React.createElement("div", { className: "waveform-label" }, /* @__PURE__ */ React.createElement("span", null, "voice waveform"), recording && interimT && /* @__PURE__ */ React.createElement("span", { className: "live-transcript" }, '"', interimT, '"')), /* @__PURE__ */ React.createElement("canvas", { ref: canvasRef })), /* @__PURE__ */ React.createElement("div", { className: "meter-row" }, [["volume", levels.volume], ["pitch", levels.pitch], ["stress", levels.stress]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { className: "meter-box", key: l }, /* @__PURE__ */ React.createElement("div", { className: "meter-label" }, l), /* @__PURE__ */ React.createElement("div", { className: "meter-value", style: { color: mc(v) } }, v), /* @__PURE__ */ React.createElement("div", { className: "meter-bar-track" }, /* @__PURE__ */ React.createElement("div", { className: "meter-bar-fill", style: { width: `${v}%`, background: mc(v) } }))))), (recording || finalT) && /* @__PURE__ */ React.createElement("div", { className: "transcript-box" }, /* @__PURE__ */ React.createElement("div", { className: "transcript-label" }, "transcript"), /* @__PURE__ */ React.createElement("div", { className: "transcript-text" }, finalT, interimT && /* @__PURE__ */ React.createElement("span", { className: "interim" }, " ", interimT), !finalT && !interimT && recording && /* @__PURE__ */ React.createElement("span", { style: { color: C.muted, fontStyle: "italic" } }, "listening..."))), /* @__PURE__ */ React.createElement("div", { className: "controls" }, /* @__PURE__ */ React.createElement("button", { className: `btn btn-record ${recording ? "recording" : ""}`, onClick: recording ? stopRec : startRec }, recording ? "\u23F9 stop" : "\u23FA record"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-analyze", disabled: !audioBlob || analyzing || !apiKey && !ollama.online, onClick: analyze }, analyzing ? "scanning..." : "analyze"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-clear", onClick: clear }, "clr")), analyzing && /* @__PURE__ */ React.createElement("div", { className: "loading-panel" }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "0.75rem", color: C.muted, letterSpacing: "0.2em" } }, "reflecting on language patterns"), /* @__PURE__ */ React.createElement("div", { className: "scan-bar" }, /* @__PURE__ */ React.createElement("div", { className: "scan-fill" }))), result && !analyzing && /* @__PURE__ */ React.createElement("div", { className: "result-panel" }, /* @__PURE__ */ React.createElement("div", { className: "verdict-line" }, /* @__PURE__ */ React.createElement("span", { className: "verdict-badge", style: { borderColor: C.warn, color: C.warn } }, "LINGUISTIC REFLECTION")), /* @__PURE__ */ React.createElement("div", { className: "analysis-text" }, result.reflection), finalT && /* @__PURE__ */ React.createElement("div", { className: "result-transcript" }, '"', finalT, '"'), result.patterns?.map((s, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { fontSize: "0.65rem", color: C.muted, padding: "4px 0", borderBottom: `1px solid ${C.border}` } }, "\u25B8 ", s)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "0.6rem", color: C.warn, marginTop: "8px" } }, "\u26A0 ", result.note || "entertainment only \u2014 not deception detection")), /* @__PURE__ */ React.createElement("div", { className: "log-panel" }, log.map((e, i) => /* @__PURE__ */ React.createElement("div", { key: i, className: `log-entry ${e.type}` }, /* @__PURE__ */ React.createElement("span", { className: "ts" }, e.ts), /* @__PURE__ */ React.createElement("span", { className: "msg" }, e.msg)))), /* @__PURE__ */ React.createElement("div", { className: "footer" }, /* @__PURE__ */ React.createElement("span", { className: "warn" }, "\u26A0 entertainment only \xB7 linguistic reflection, not deception detection \xB7 cannot determine truthfulness"), /* @__PURE__ */ React.createElement("br", null), "\u276F y_ \xB7 --force ./buildyou"));
 }
 ReactDOM.createRoot(document.getElementById("root")).render(/* @__PURE__ */ React.createElement(Veritex, null));
 
